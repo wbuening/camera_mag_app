@@ -1,7 +1,6 @@
 package com.example.magnifier
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.graphics.*
 import android.os.Bundle
@@ -9,7 +8,6 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
-import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -33,7 +31,7 @@ class MainActivity : AppCompatActivity() {
     private var isLight = false
     private var currentZoomRatio = 1.0f
 
-    // Pinch-to-Zoom Unterstützung
+    // Pinch-to-Zoom
     private lateinit var scaleGestureDetector: ScaleGestureDetector
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,19 +39,19 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Handle window insets for navigation bar
+        // WindowInsets: Nur Insets hinzufügen, kein kumulatives Padding
         ViewCompat.setOnApplyWindowInsetsListener(binding.controlsLayout) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(
-                view.paddingLeft,
-                view.paddingTop,
-                view.paddingRight,
-                view.paddingBottom + systemBars.bottom + 16
+                16, // links
+                16, // oben
+                16, // rechts
+                16 + systemBars.bottom // unten: Basis 16dp + Navigationsleiste
             )
             insets
         }
 
-        // Request camera permissions
+        // Berechtigungen prüfen
         if (allPermissionsGranted()) {
             startCamera()
         } else {
@@ -62,13 +60,11 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // Set up UI controls
         setupControls()
 
-        // Initialisiere ScaleGestureDetector für Pinch-to-Zoom
+        // Pinch-to-Zoom
         scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                // Berechne neuen Zoom-Wert, begrenzt auf 1.0x–10.0x
                 val newZoom = (currentZoomRatio * detector.scaleFactor).coerceIn(1.0f, 10.0f)
                 currentZoomRatio = newZoom
 
@@ -76,18 +72,15 @@ class MainActivity : AppCompatActivity() {
                     camera.cameraControl.setZoomRatio(currentZoomRatio)
                 }
 
-                // Aktualisiere UI auf Haupt-Thread
                 runOnUiThread {
                     val progress = ((currentZoomRatio - 1.0f) * 10).toInt().coerceIn(0, 90)
                     binding.zoomSlider.setProgress(progress, true)
                     binding.updateZoomText(currentZoomRatio)
                 }
-
                 return true
             }
         })
 
-        // Füge Touch-Listener für beide Kameravorschau-Views hinzu
         setupPinchToZoom()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -96,16 +89,14 @@ class MainActivity : AppCompatActivity() {
     private fun setupPinchToZoom() {
         val onTouchListener = View.OnTouchListener { _, event ->
             scaleGestureDetector.onTouchEvent(event)
-            true // Touch-Event verbrauchen, um Scrollen zu vermeiden
+            true
         }
-
         binding.viewFinder.setOnTouchListener(onTouchListener)
         binding.processedImageView.setOnTouchListener(onTouchListener)
     }
 
     private fun setupControls() {
-        // Zoom slider (1x to 10x magnification)
-        binding.zoomSlider.max = 90 // 0 to 90 → 1.0x to 10.0x
+        binding.zoomSlider.max = 90
         binding.zoomSlider.progress = 0
         binding.updateZoomText(1.0f)
 
@@ -124,16 +115,12 @@ class MainActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        // Invert filter toggle
         binding.invertToggle.setOnCheckedChangeListener { _, isChecked ->
-            Log.d("Magnifier", "Invert toggle changed to: $isChecked")
             isInverted = isChecked
             applyInvertFilter()
         }
 
-        // Light toggle
         binding.lightToggle.setOnCheckedChangeListener { _, isChecked ->
-            Log.d("Magnifier", "Light toggle changed to: $isChecked")
             isLight = isChecked
             applyChangeLight()
         }
@@ -144,14 +131,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyChangeLight() {
-        Log.d("Magnifier", "applyChangeLight called with isLight=$isLight")
         if (::camera.isInitialized) {
             camera.cameraControl.enableTorch(isLight)
         }
     }
 
     private fun applyInvertFilter() {
-        Log.d("Magnifier", "applyInvertFilter called with isInverted=$isInverted")
         startCamera()
     }
 
@@ -161,7 +146,6 @@ class MainActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
-            // Preview
             val preview = Preview.Builder().build()
 
             if (isInverted) {
@@ -188,7 +172,6 @@ class MainActivity : AppCompatActivity() {
 
             try {
                 cameraProvider.unbindAll()
-
                 val useCases = mutableListOf(preview as UseCase)
                 imageAnalysis?.let { useCases.add(it) }
 
@@ -196,7 +179,7 @@ class MainActivity : AppCompatActivity() {
                     this, cameraSelector, *useCases.toTypedArray()
                 )
 
-                // Setze aktuellen Zoom und Lichtstatus nach Neustart
+                // Wiederherstellung von Zuständen
                 camera.cameraControl.setZoomRatio(currentZoomRatio)
                 camera.cameraControl.enableTorch(isLight)
 
@@ -223,14 +206,10 @@ class MainActivity : AppCompatActivity() {
         buffer.rewind()
         bitmap.copyPixelsFromBuffer(buffer)
 
-        // Rotate the bitmap to correct orientation
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
         val rotatedBitmap = rotateBitmap(bitmap, rotationDegrees)
-
-        // Apply color inversion
         val invertedBitmap = invertColors(rotatedBitmap)
 
-        // Update UI on main thread
         runOnUiThread {
             binding.processedImageView.setImageBitmap(invertedBitmap)
         }
@@ -240,38 +219,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun rotateBitmap(bitmap: Bitmap, degrees: Int): Bitmap {
         if (degrees == 0) return bitmap
-
-        val matrix = Matrix()
-        matrix.postRotate(degrees.toFloat())
-
-        return Bitmap.createBitmap(
-            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
-        )
+        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     private fun invertColors(bitmap: Bitmap): Bitmap {
         val inverted = Bitmap.createBitmap(bitmap.width, bitmap.height, bitmap.config ?: Bitmap.Config.ARGB_8888)
         val canvas = Canvas(inverted)
-        val paint = Paint()
-
-        val colorMatrix = ColorMatrix(
-            floatArrayOf(
-                -1f, 0f, 0f, 0f, 255f,
-                0f, -1f, 0f, 0f, 255f,
-                0f, 0f, -1f, 0f, 255f,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-        paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+        val paint = Paint().apply {
+            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply {
+                set(floatArrayOf(
+                    -1f, 0f, 0f, 0f, 255f,
+                    0f, -1f, 0f, 0f, 255f,
+                    0f, 0f, -1f, 0f, 255f,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+            })
+        }
         canvas.drawBitmap(bitmap, 0f, 0f, paint)
-
         return inverted
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
-        ContextCompat.checkSelfPermission(
-            baseContext, it
-        ) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Wiederherstellung nach Standby
+        if (::camera.isInitialized) {
+            camera.cameraControl.setZoomRatio(currentZoomRatio)
+            camera.cameraControl.enableTorch(isLight)
+        }
     }
 
     override fun onDestroy() {
@@ -280,18 +259,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<String>, grantResults: IntArray
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
                 startCamera()
             } else {
-                Toast.makeText(
-                    this,
-                    "Camera permission is required for this app",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(this, "Camera permission is required", Toast.LENGTH_SHORT).show()
                 finish()
             }
         }
