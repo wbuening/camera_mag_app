@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.graphics.*
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
+import android.widget.ImageView
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
@@ -60,6 +62,9 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Set up UI controls
         setupControls()
 
         // Pinch-to-Zoom
