@@ -5,11 +5,11 @@ import android.content.pm.PackageManager
 import android.graphics.*
 import android.os.Bundle
 import android.util.Log
-import android.view.WindowManager
-import android.widget.ImageView
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.GestureDetector
 import android.view.View
+import android.view.WindowManager
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -32,61 +32,57 @@ class MainActivity : AppCompatActivity() {
     private var isInverted = false
     private var isLight = false
     private var currentZoomRatio = 1.0f
+    private var isFrozen = false
+    private var shouldResetZoom = true
 
-    // Pinch-to-Zoom
     private lateinit var scaleGestureDetector: ScaleGestureDetector
+    private lateinit var gestureDetector: GestureDetector
+
+    // Letztes Frame – bereits gezoomt durch CameraX!
+    private var lastRawBitmap: Bitmap? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Zoom bei jeder Neuerstellung (z. B. durch Drehung) zurücksetzen
         currentZoomRatio = 1.0f
+        isFrozen = false
+        shouldResetZoom = true
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // WindowInsets: Nur Insets hinzufügen, kein kumulatives Padding
         ViewCompat.setOnApplyWindowInsetsListener(binding.controlsLayout) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(
-                16, // links
-                16, // oben
-                16, // rechts
-                16 + systemBars.bottom // unten: Basis 16dp + Navigationsleiste
-            )
+            view.setPadding(16, 16, 16, 16 + systemBars.bottom)
             insets
         }
 
-        // Berechtigungen prüfen
         if (allPermissionsGranted()) {
             startCamera()
         } else {
-            ActivityCompat.requestPermissions(
-                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
-            )
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
         }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Set up UI controls
         setupControls()
 
-        updateZoomUI()
-
-        // Pinch-to-Zoom
         scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: ScaleGestureDetector): Boolean {
+                if (isFrozen) return false
                 val newZoom = (currentZoomRatio * detector.scaleFactor).coerceIn(1.0f, 10.0f)
                 currentZoomRatio = newZoom
-
                 if (::camera.isInitialized) {
                     camera.cameraControl.setZoomRatio(currentZoomRatio)
                 }
+                runOnUiThread { updateZoomUI() }
+                return true
+            }
+        })
 
-                runOnUiThread {
-                    val progress = ((currentZoomRatio - 1.0f) * 10).toInt().coerceIn(0, 90)
-                    binding.zoomSlider.setProgress(progress, true)
-                    binding.updateZoomText(currentZoomRatio)
-                }
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                toggleFreeze()
                 return true
             }
         })
@@ -99,23 +95,20 @@ class MainActivity : AppCompatActivity() {
     private fun setupPinchToZoom() {
         val onTouchListener = View.OnTouchListener { _, event ->
             scaleGestureDetector.onTouchEvent(event)
+            gestureDetector.onTouchEvent(event)
             true
         }
         binding.viewFinder.setOnTouchListener(onTouchListener)
         binding.processedImageView.setOnTouchListener(onTouchListener)
     }
 
-    private fun updateZoomUI() {
-        val progress = ((currentZoomRatio - 1.0f) * 10).toInt().coerceIn(0, 90)
-        binding.zoomSlider.setProgress(progress, false)
-        binding.updateZoomText(currentZoomRatio)
-    }
     private fun setupControls() {
         binding.zoomSlider.max = 90
+        updateZoomUI()
 
         binding.zoomSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
+                if (fromUser && !isFrozen) {
                     currentZoomRatio = 1.0f + (progress / 10.0f)
                     if (::camera.isInitialized) {
                         camera.cameraControl.setZoomRatio(currentZoomRatio)
@@ -123,14 +116,14 @@ class MainActivity : AppCompatActivity() {
                     binding.updateZoomText(currentZoomRatio)
                 }
             }
-
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
         binding.invertToggle.setOnCheckedChangeListener { _, isChecked ->
             isInverted = isChecked
-            applyInvertFilter()
+            shouldResetZoom = false
+            startCamera()
         }
 
         binding.lightToggle.setOnCheckedChangeListener { _, isChecked ->
@@ -143,63 +136,119 @@ class MainActivity : AppCompatActivity() {
         zoomText.text = String.format("%.1fx", zoom)
     }
 
+    private fun updateZoomUI() {
+        val progress = ((currentZoomRatio - 1.0f) * 10).toInt().coerceIn(0, 90)
+        binding.zoomSlider.setProgress(progress, false)
+        binding.updateZoomText(currentZoomRatio)
+    }
+
     private fun applyChangeLight() {
-        if (::camera.isInitialized) {
+        if (::camera.isInitialized && !isFrozen) {
             camera.cameraControl.enableTorch(isLight)
         }
     }
 
-    private fun applyInvertFilter() {
-        startCamera()
+    private fun toggleFreeze() {
+        if (lastRawBitmap == null) return
+
+        isFrozen = !isFrozen
+
+        if (isFrozen) {
+            // Zeige eingefrorenes Bild
+            val bitmapToDisplay = if (isInverted) invertColors(lastRawBitmap!!) else lastRawBitmap
+            binding.processedImageView.setImageBitmap(bitmapToDisplay)
+            binding.processedImageView.visibility = View.VISIBLE
+            binding.viewFinder.visibility = View.INVISIBLE
+
+            // 🔒 Deaktiviere alle Steuerelemente
+            binding.zoomSlider.isEnabled = false
+            binding.lightToggle.isEnabled = false
+            binding.invertToggle.isEnabled = false
+
+        } else {
+            // 🔓 Aktiviere alle Steuerelemente
+            binding.zoomSlider.isEnabled = true
+            binding.lightToggle.isEnabled = true
+            binding.invertToggle.isEnabled = true
+
+            // Stelle Sichtbarkeit gemäß aktuellem Modus wieder her
+            if (isInverted) {
+                binding.processedImageView.visibility = View.VISIBLE
+                binding.viewFinder.visibility = View.INVISIBLE
+            } else {
+                binding.viewFinder.visibility = View.VISIBLE
+                binding.processedImageView.visibility = View.GONE
+            }
+
+            shouldResetZoom = false
+            startCamera()
+        }
     }
 
     private fun startCamera() {
+        if (isFrozen) return
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
             val preview = Preview.Builder().build()
+            preview.setSurfaceProvider(binding.viewFinder.surfaceProvider)
 
+            // 🔥 Immer ImageAnalysis – aber nur bei Bedarf UI aktualisieren
+            imageAnalysis = ImageAnalysis.Builder()
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { analysis ->
+                    analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                        try {
+                            val bitmap = imageProxyToBitmap(imageProxy)
+                            val rotated = rotateBitmap(bitmap, imageProxy.imageInfo.rotationDegrees)
+                            lastRawBitmap = rotated
+
+                            // Nur im Invert-Modus UI aktualisieren
+                            if (!isFrozen && isInverted) {
+                                val inverted = invertColors(rotated)
+                                runOnUiThread {
+                                    binding.processedImageView.setImageBitmap(inverted)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("Magnifier", "Frame processing failed", e)
+                        } finally {
+                            imageProxy.close()
+                        }
+                    }
+                }
+
+            // Sichtbarkeit
             if (isInverted) {
                 binding.viewFinder.visibility = View.INVISIBLE
                 binding.processedImageView.visibility = View.VISIBLE
-
-                imageAnalysis = ImageAnalysis.Builder()
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                    .also { analysis ->
-                        analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            processImage(imageProxy)
-                        }
-                    }
             } else {
                 binding.viewFinder.visibility = View.VISIBLE
                 binding.processedImageView.visibility = View.GONE
-                preview.setSurfaceProvider(binding.viewFinder.surfaceProvider)
-                imageAnalysis = null
             }
-
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
                 cameraProvider.unbindAll()
-                val useCases = mutableListOf(preview as UseCase)
-                imageAnalysis?.let { useCases.add(it) }
-
                 camera = cameraProvider.bindToLifecycle(
-                    this, cameraSelector, *useCases.toTypedArray()
+                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis!!
                 )
 
-                // Wiederherstellung von Zuständen
-                currentZoomRatio = 1.0f
+                if (shouldResetZoom) {
+                    currentZoomRatio = 1.0f
+                }
                 camera.cameraControl.setZoomRatio(currentZoomRatio)
                 camera.cameraControl.enableTorch(isLight)
+                shouldResetZoom = false
 
                 runOnUiThread {
                     updateZoomUI()
                 }
+
             } catch (exc: Exception) {
                 Toast.makeText(this, "Camera initialization failed", Toast.LENGTH_SHORT).show()
                 Log.e("Magnifier", "Camera binding failed", exc)
@@ -208,7 +257,7 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun processImage(imageProxy: ImageProxy) {
+    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
         val planes = imageProxy.planes
         val buffer = planes[0].buffer
         val pixelStride = planes[0].pixelStride
@@ -222,16 +271,7 @@ class MainActivity : AppCompatActivity() {
         )
         buffer.rewind()
         bitmap.copyPixelsFromBuffer(buffer)
-
-        val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-        val rotatedBitmap = rotateBitmap(bitmap, rotationDegrees)
-        val invertedBitmap = invertColors(rotatedBitmap)
-
-        runOnUiThread {
-            binding.processedImageView.setImageBitmap(invertedBitmap)
-        }
-
-        imageProxy.close()
+        return bitmap
     }
 
     private fun rotateBitmap(bitmap: Bitmap, degrees: Int): Bitmap {
@@ -263,8 +303,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Wiederherstellung nach Standby
-        if (::camera.isInitialized) {
+        if (::camera.isInitialized && !isFrozen) {
             camera.cameraControl.setZoomRatio(currentZoomRatio)
             camera.cameraControl.enableTorch(isLight)
         }
