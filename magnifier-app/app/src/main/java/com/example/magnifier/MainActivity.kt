@@ -38,6 +38,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Zoom bei jeder Neuerstellung (z. B. durch Drehung) zurücksetzen
+        currentZoomRatio = 1.0f
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -66,6 +69,8 @@ class MainActivity : AppCompatActivity() {
 
         // Set up UI controls
         setupControls()
+
+        updateZoomUI()
 
         // Pinch-to-Zoom
         scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -100,10 +105,13 @@ class MainActivity : AppCompatActivity() {
         binding.processedImageView.setOnTouchListener(onTouchListener)
     }
 
+    private fun updateZoomUI() {
+        val progress = ((currentZoomRatio - 1.0f) * 10).toInt().coerceIn(0, 90)
+        binding.zoomSlider.setProgress(progress, false)
+        binding.updateZoomText(currentZoomRatio)
+    }
     private fun setupControls() {
         binding.zoomSlider.max = 90
-        binding.zoomSlider.progress = 0
-        binding.updateZoomText(1.0f)
 
         binding.zoomSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -185,9 +193,13 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 // Wiederherstellung von Zuständen
+                currentZoomRatio = 1.0f
                 camera.cameraControl.setZoomRatio(currentZoomRatio)
                 camera.cameraControl.enableTorch(isLight)
 
+                runOnUiThread {
+                    updateZoomUI()
+                }
             } catch (exc: Exception) {
                 Toast.makeText(this, "Camera initialization failed", Toast.LENGTH_SHORT).show()
                 Log.e("Magnifier", "Camera binding failed", exc)
