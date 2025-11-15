@@ -1,33 +1,41 @@
-package com.example.magnifier
+package de.wolfgangbuening.magnifier
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.os.Bundle
 import android.util.Log
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
-import android.view.GestureDetector
 import android.view.View
 import android.view.WindowManager
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.camera.core.*
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.example.magnifier.databinding.ActivityMainBinding
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import de.wolfgangbuening.magnifier.databinding.ActivityMainBinding
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
-    private lateinit var camera: androidx.camera.core.Camera
+    private lateinit var camera: Camera
     private var imageAnalysis: ImageAnalysis? = null
     private var isInverted = false
     private var isLight = false
@@ -67,18 +75,20 @@ class MainActivity : AppCompatActivity() {
 
         setupControls()
 
-        scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScale(detector: ScaleGestureDetector): Boolean {
-                if (isFrozen) return false
-                val newZoom = (currentZoomRatio * detector.scaleFactor).coerceIn(1.0f, 10.0f)
-                currentZoomRatio = newZoom
-                if (::camera.isInitialized) {
-                    camera.cameraControl.setZoomRatio(currentZoomRatio)
+        scaleGestureDetector = ScaleGestureDetector(
+            this,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    if (isFrozen) return false
+                    val newZoom = (currentZoomRatio * detector.scaleFactor).coerceIn(1.0f, 10.0f)
+                    currentZoomRatio = newZoom
+                    if (::camera.isInitialized) {
+                        camera.cameraControl.setZoomRatio(currentZoomRatio)
+                    }
+                    runOnUiThread { updateZoomUI() }
+                    return true
                 }
-                runOnUiThread { updateZoomUI() }
-                return true
-            }
-        })
+            })
 
         gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDoubleTap(e: MotionEvent): Boolean {
@@ -188,7 +198,7 @@ class MainActivity : AppCompatActivity() {
     private fun startCamera() {
         if (isFrozen) return
 
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        val cameraProviderFuture = ProcessCameraProvider.Companion.getInstance(this)
 
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()

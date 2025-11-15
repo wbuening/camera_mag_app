@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.magnifier"
+    namespace = "de.wolfgangbuening.magnifier"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.magnifier"
+        applicationId = "de.wolfgangbuening.magnifier"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
